@@ -68,7 +68,8 @@ export default function Home() {
           status: "published"
         };
       });
-      cloudStories.sort((a, b) => b.createdAt - a.createdAt);\n      setStories([...cloudStories, ...samples]);
+      cloudStories.sort((a, b) => b.createdAt - a.createdAt);
+      setStories([...cloudStories, ...samples]);
     }, error => {
       console.error("Firestore published stories listener:", error);
       setNotice(error.code === "permission-denied"
@@ -84,10 +85,9 @@ export default function Home() {
       collection(db, "stories"),
       where("authorUid", "==", user.uid),
       where("status", "==", "draft"),
-      orderBy("updatedAt", "desc")
     );
     const unsubscribeDrafts = onSnapshot(draftsQuery, snapshot => {
-      setDrafts(snapshot.docs.filter(item => item.data().status === "draft").map(item => {
+      const ownDrafts = snapshot.docs.filter(item => item.data().status === "draft").map(item => {
         const data = item.data();
         return {
           id: item.id,
@@ -101,7 +101,9 @@ export default function Home() {
           updatedAt: typeof data.updatedAt === "number" ? data.updatedAt : 0,
           status: "draft"
         };
-      }));
+      });
+      ownDrafts.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+      setDrafts(ownDrafts);
     }, error => {
       console.error("Firestore drafts listener:", error);
       setNotice(error.code === "permission-denied"
