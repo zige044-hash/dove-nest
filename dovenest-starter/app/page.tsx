@@ -88,7 +88,7 @@ export default function Home() {
       where("authorUid", "==", user.uid)
     );
     const unsubscribeDrafts = onSnapshot(draftsQuery, snapshot => {
-      const ownDrafts = snapshot.docs.filter(item => item.data().status === "draft").map(item => {
+      const ownDrafts: Story[] = snapshot.docs.filter(item => item.data().status === "draft").map(item => {
         const data = item.data();
         return {
           id: item.id,
