@@ -81,10 +81,11 @@ export default function Home() {
 
   useEffect(() => {
     if (!db || !user) { setDrafts([]); return; }
+    // 只用作者 UID 查詢，避免多欄位查詢需要額外索引；
+    // 再於前端篩選草稿，且查詢範圍只包含目前登入者自己的作品。
     const draftsQuery = query(
       collection(db, "stories"),
-      where("authorUid", "==", user.uid),
-      where("status", "==", "draft"),
+      where("authorUid", "==", user.uid)
     );
     const unsubscribeDrafts = onSnapshot(draftsQuery, snapshot => {
       const ownDrafts = snapshot.docs.filter(item => item.data().status === "draft").map(item => {
