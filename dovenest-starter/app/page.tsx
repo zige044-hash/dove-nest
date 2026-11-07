@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { addDoc, collection, deleteDoc, doc, onSnapshot, orderBy, query, updateDoc, where } from "firebase/firestore";
+import { addDoc, collection, deleteDoc, doc, onSnapshot, query, updateDoc, where } from "firebase/firestore";
 import { db, signInWithGoogle, signOutUser, useAuth } from "./firebase";
 
 type Story = {
@@ -51,7 +51,7 @@ export default function Home() {
       setNotice("Firebase 尚未完成設定，暫時無法讀取雲端作品。");
       return;
     }
-    const publishedQuery = query(collection(db, "stories"), where("status", "==", "published"), orderBy("createdAt", "desc"));
+    const publishedQuery = query(collection(db, "stories"), where("status", "==", "published"));
     const unsubscribePublished = onSnapshot(publishedQuery, snapshot => {
       const cloudStories: Story[] = snapshot.docs.map(item => {
         const data = item.data();
@@ -68,7 +68,7 @@ export default function Home() {
           status: "published"
         };
       });
-      setStories([...cloudStories, ...samples]);
+      cloudStories.sort((a, b) => b.createdAt - a.createdAt);\n      setStories([...cloudStories, ...samples]);
     }, error => {
       console.error("Firestore published stories listener:", error);
       setNotice(error.code === "permission-denied"
@@ -87,7 +87,7 @@ export default function Home() {
       orderBy("updatedAt", "desc")
     );
     const unsubscribeDrafts = onSnapshot(draftsQuery, snapshot => {
-      setDrafts(snapshot.docs.map(item => {
+      setDrafts(snapshot.docs.filter(item => item.data().status === "draft").map(item => {
         const data = item.data();
         return {
           id: item.id,
