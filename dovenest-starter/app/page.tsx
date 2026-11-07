@@ -36,6 +36,7 @@ export default function Home() {
   const [page, setPage] = useState("home");
   const [stories, setStories] = useState<Story[]>(samples);
   const [drafts, setDrafts] = useState<Story[]>([]);
+  const [myPublishedStories, setMyPublishedStories] = useState<Story[]>([]);
   const [queryText, setQueryText] = useState("");
   const [category, setCategory] = useState("全部");
   const [selected, setSelected] = useState<Story | null>(null);
@@ -44,6 +45,7 @@ export default function Home() {
   const [description, setDescription] = useState("");
   const [contentText, setContentText] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingStatus, setEditingStatus] = useState<Story["status"]>(undefined);
   const [notice, setNotice] = useState("");
 
   useEffect(() => {
@@ -80,7 +82,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!db || !user) { setDrafts([]); return; }
+    if (!db || !user) { setDrafts([]); setMyPublishedStories([]); return; }
     // 只用作者 UID 查詢，避免多欄位查詢需要額外索引；
     // 再於前端篩選草稿，且查詢範圍只包含目前登入者自己的作品。
     const draftsQuery = query(
@@ -88,7 +90,7 @@ export default function Home() {
       where("authorUid", "==", user.uid)
     );
     const unsubscribeDrafts = onSnapshot(draftsQuery, snapshot => {
-      const ownDrafts = snapshot.docs.filter(item => item.data().status === "draft").map<Story>(item => {
+      const ownStories = snapshot.docs.map<Story>(item => {
         const data = item.data();
         return {
           id: item.id,
@@ -100,11 +102,15 @@ export default function Home() {
           content: String(data.content ?? ""),
           createdAt: typeof data.createdAt === "number" ? data.createdAt : Date.now(),
           updatedAt: typeof data.updatedAt === "number" ? data.updatedAt : 0,
-          status: "draft"
+          status: data.status === "published" ? "published" : "draft"
         };
       });
+      const ownDrafts = ownStories.filter(story => story.status === "draft");
+      const ownPublished = ownStories.filter(story => story.status === "published");
       ownDrafts.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+      ownPublished.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
       setDrafts(ownDrafts);
+      setMyPublishedStories(ownPublished);
     }, error => {
       console.error("Firestore drafts listener:", error);
       setNotice(error.code === "permission-denied"
@@ -125,16 +131,18 @@ export default function Home() {
     setDescription("");
     setContentText("");
     setEditingId(null);
+    setEditingStatus(undefined);
   }
 
-  function editDraft(story: Story) {
+  function editStory(story: Story) {
     setTitle(story.title);
     setKind(story.category);
     setDescription(story.description);
     setContentText(story.content);
     setEditingId(story.id);
+    setEditingStatus(story.status ?? "draft");
     setPage("write");
-    setNotice("已載入草稿，可以繼續編輯。");
+    setNotice(story.status === "published" ? "已載入已發布作品，修改後可更新作品。" : "已載入草稿，可以繼續編輯。");
   }
 
   async function saveDraft() {
@@ -154,7 +162,7 @@ export default function Home() {
       description: description.trim(),
       content: contentText,
       updatedAt: now,
-      status: "draft"
+      status: editingStatus === "published" ? "published" : "draft"
     };
     try {
       if (editingId) {
@@ -163,7 +171,7 @@ export default function Home() {
         const created = await addDoc(collection(db, "stories"), { ...data, createdAt: now });
         setEditingId(created.id);
       }
-      setNotice("草稿已保存！只有你自己看得到。");
+      setNotice(editingStatus === "published" ? "作品修改已保存，仍維持公開狀態。" : "草稿已保存！只有你自己看得到。");
     } catch (error) {
       console.error("Firestore save draft:", error);
       const code = error instanceof Error && "code" in error ? String(error.code) : "";
@@ -208,16 +216,23 @@ export default function Home() {
     }
   }
 
-  async function deleteDraft(story: Story) {
-    if (!db || !user || story.authorUid !== user.uid) return;
-    if (!window.confirm("確定要刪除這份草稿嗎？刪除後無法復原。")) return;
+  async function deleteOwnedStory(story: Story) {
+    if (!db || !user || story.authorUid !== user.uid) {
+      setNotice("無法刪除：請確認已登入原作者帳號。");
+      return;
+    }
+    const itemName = story.status === "published" ? "這篇已發布作品" : "這份私人草稿";
+    if (!window.confirm(`確定要刪除${itemName}「${story.title}」嗎？刪除後無法復原。`)) return;
     try {
       await deleteDoc(doc(db, "stories", story.id));
       if (editingId === story.id) clearEditor();
-      setNotice("草稿已刪除。");
+      setNotice(story.status === "published" ? "作品已刪除，首頁與閱讀書架會自動更新。" : "草稿已刪除。");
     } catch (error) {
-      console.error("Firestore delete draft:", error);
-      setNotice("刪除草稿失敗，請稍後再試。");
+      console.error("Firestore delete story:", error);
+      const code = error instanceof Error && "code" in error ? String(error.code) : "";
+      setNotice(code === "permission-denied"
+        ? "刪除失敗：資料庫拒絕此操作，請確認作品作者 UID 與 Firestore 安全規則。"
+        : "刪除失敗，請稍後再試。");
     }
   }
 
@@ -287,16 +302,20 @@ export default function Home() {
           <label>作品分類<select value={kind} onChange={e => setKind(e.target.value)}>{categories.slice(1).map(c => <option key={c}>{c}</option>)}</select></label>
           <label>故事簡介<textarea rows={3} value={description} onChange={e => setDescription(e.target.value)} placeholder="簡單介紹你的故事…"/></label>
           <label>正文內容<textarea rows={13} value={contentText} onChange={e => setContentText(e.target.value)} placeholder="從這裡開始，寫下你的故事…"/></label>
-          <div className="editor-bottom"><span>{editingId ? "正在編輯已保存的草稿。" : "尚未保存的內容只在目前頁面中。記得保存草稿！"}</span><div className="editor-actions"><button className="secondary" onClick={saveDraft}>保存草稿</button><button className="primary" onClick={publish}>正式發布</button></div></div>
+          <div className="editor-bottom"><span>{editingId ? (editingStatus === "published" ? "正在編輯公開作品。" : "正在編輯已保存的草稿。") : "尚未保存的內容只在目前頁面中。記得保存草稿！"}</span><div className="editor-actions"><button className="secondary" onClick={saveDraft}>保存草稿</button><button className="primary" onClick={publish}>{editingStatus === "published" ? "更新作品" : "正式發布"}</button></div></div>
         </div>
       </section>}
 
       {page === "authors" && <section className="page-section">
         <p className="eyebrow">MY WRITING</p><h1>我的作品</h1><p className="muted">管理你的草稿，準備好時再讓故事公開。</p>
         {!user ? <div className="callout">登入後才能查看自己的私人草稿。<button className="text-link" onClick={login}>立即登入 →</button></div> : <>
-          <div className="section-heading"><div><p className="eyebrow">PRIVATE</p><h2>私人草稿</h2></div><button className="text-link" onClick={() => { clearEditor(); setPage("write"); }}>新增作品 ＋</button></div>
+          <div className="section-heading"><div><p className="eyebrow">PUBLISHED</p><h2>已發布作品</h2></div><button className="text-link" onClick={() => { clearEditor(); setPage("write"); }}>新增作品 ＋</button></div>
+          {!myPublishedStories.length ? <p className="empty">目前還沒有已發布的作品。</p> :
+            <div className="draft-list">{myPublishedStories.map(story => <div className="draft-item" key={story.id}><div className="draft-info"><b>{story.title}</b><small>{story.category} · 最近更新：{story.updatedAt ? new Date(story.updatedAt).toLocaleString() : "—"}</small><p>{story.description || "尚未填寫簡介"}</p></div><div className="draft-actions"><button className="small-outline" onClick={() => editStory(story)}>編輯</button><button className="small-outline" onClick={() => deleteOwnedStory(story)}>刪除</button></div></div>)}
+            </div>}
+          <div className="section-heading" style={{ marginTop: 48 }}><div><p className="eyebrow">PRIVATE</p><h2>私人草稿</h2></div><button className="text-link" onClick={() => { clearEditor(); setPage("write"); }}>新增草稿 ＋</button></div>
           {!drafts.length ? <p className="empty">目前沒有草稿。想寫的故事，可以先放在這裡。</p> :
-            <div className="draft-list">{drafts.map(d => <div className="draft-item" key={d.id}><div className="draft-info"><b>{d.title}</b><small>{d.category} · 最近保存：{d.updatedAt ? new Date(d.updatedAt).toLocaleString() : "剛剛"}</small><p>{d.description || "尚未填寫簡介"}</p></div><div className="draft-actions"><button className="small-outline" onClick={() => editDraft(d)}>繼續編輯</button><button className="small-outline" onClick={() => deleteDraft(d)}>刪除</button></div></div>)}
+            <div className="draft-list">{drafts.map(d => <div className="draft-item" key={d.id}><div className="draft-info"><b>{d.title}</b><small>{d.category} · 最近保存：{d.updatedAt ? new Date(d.updatedAt).toLocaleString() : "剛剛"}</small><p>{d.description || "尚未填寫簡介"}</p></div><div className="draft-actions"><button className="small-outline" onClick={() => editStory(d)}>繼續編輯</button><button className="small-outline" onClick={() => deleteOwnedStory(d)}>刪除</button></div></div>)}
             </div>}
         </>}
       </section>}
