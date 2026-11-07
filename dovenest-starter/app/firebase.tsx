@@ -1,9 +1,10 @@
- "use client";
+"use client";
 
 import { createContext, useContext, useEffect, useState } from "react";
 import type { User } from "firebase/auth";
 import { getApp, getApps, initializeApp } from "firebase/app";
 import { GoogleAuthProvider, getAuth, onAuthStateChanged, signInWithPopup, signOut } from "firebase/auth";
+import { getFirestore } from "firebase/firestore";
 
 const config = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -16,6 +17,8 @@ const config = {
 const configured = Boolean(config.apiKey && config.authDomain && config.projectId && config.appId);
 const app = configured ? (getApps().length ? getApp() : initializeApp(config)) : null;
 const auth = app ? getAuth(app) : null;
+
+export const db = app ? getFirestore(app) : null;
 
 const AuthContext = createContext<{user: User | null; loading: boolean}>({user:null, loading:false});
 export function AuthProvider({children}:{children:React.ReactNode}) {
