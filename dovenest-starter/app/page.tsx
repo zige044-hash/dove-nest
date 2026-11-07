@@ -1,17 +1,24 @@
- "use client";
+"use client";
 
-import { useMemo, useState } from "react";
-import { signInWithGoogle, signOutUser, useAuth } from "./firebase";
+import { useEffect, useMemo, useState } from "react";
+import { addDoc, collection, onSnapshot, orderBy, query } from "firebase/firestore";
+import { db, signInWithGoogle, signOutUser, useAuth } from "./firebase";
 
 type Story = {
-  id: string; title: string; author: string; category: string;
-  description: string; content: string; createdAt: number;
+  id: string;
+  title: string;
+  author: string;
+  authorUid?: string;
+  category: string;
+  description: string;
+  content: string;
+  createdAt: number;
 };
 
 const samples: Story[] = [
   { id: "sample-1", title: "窗邊的信", author: "白色羽毛", category: "短篇",
     description: "一封遲遲沒有寄出的信，究竟在等待誰來閱讀？",
-    content: "有些話，並不是不知道該怎麼說。\\n只是一直找不到適合寄出的地址。\\n\\n窗外的鴿子又來了。", createdAt: 1 },
+    content: "有些話，並不是不知道該怎麼說。\n只是一直找不到適合寄出的地址。\n\n窗外的鴿子又來了。", createdAt: 1 },
   { id: "sample-2", title: "無人認領的影子", author: "夜行者", category: "懸疑",
     description: "城市裡開始出現沒有主人，卻會自行移動的影子。",
     content: "那天晚上，我第一次發現自己的影子不見了。", createdAt: 2 },
@@ -26,36 +33,88 @@ export default function Home() {
   const { user, loading } = useAuth();
   const [page, setPage] = useState("home");
   const [stories, setStories] = useState<Story[]>(samples);
-  const [query, setQuery] = useState("");
+  const [queryText, setQueryText] = useState("");
   const [category, setCategory] = useState("全部");
   const [selected, setSelected] = useState<Story | null>(null);
   const [title, setTitle] = useState("");
   const [kind, setKind] = useState("短篇");
   const [description, setDescription] = useState("");
-  const [content, setContent] = useState("");
+  const [contentText, setContentText] = useState("");
   const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    if (!db) {
+      setNotice("Firebase 尚未完成設定，暫時無法讀取雲端作品。");
+      return;
+    }
+    const storiesQuery = query(collection(db, "stories"), orderBy("createdAt", "desc"));
+    const unsubscribe = onSnapshot(storiesQuery, snapshot => {
+      const cloudStories: Story[] = snapshot.docs.map(item => {
+        const data = item.data();
+        return {
+          id: item.id,
+          title: String(data.title ?? ""),
+          author: String(data.author ?? "鳩巢作者"),
+          authorUid: String(data.authorUid ?? ""),
+          category: String(data.category ?? "短篇"),
+          description: String(data.description ?? ""),
+          content: String(data.content ?? ""),
+          createdAt: typeof data.createdAt === "number" ? data.createdAt : 0
+        };
+      });
+      setStories([...cloudStories, ...samples]);
+    }, error => {
+      console.error("Firestore stories listener:", error);
+      setNotice(error.code === "permission-denied"
+        ? "目前 Firestore 尚未開放安全的作品讀取權限，請先完成資料庫安全規則設定。"
+        : "讀取雲端作品時發生問題，請稍後再試。");
+    });
+    return unsubscribe;
+  }, []);
 
   const filtered = useMemo(() => stories.filter(s =>
     (category === "全部" || s.category === category) &&
-    `${s.title} ${s.author} ${s.category} ${s.description}`.toLowerCase().includes(query.toLowerCase())
-  ), [stories, category, query]);
+    (s.title + " " + s.author + " " + s.category + " " + s.description).toLowerCase().includes(queryText.toLowerCase())
+  ), [stories, category, queryText]);
 
-  function publish() {
+  async function publish() {
     if (!user) { setNotice("請先使用 Google 帳號登入，再發布作品。"); return; }
-    if (!title.trim() || !content.trim()) { setNotice("請填寫作品名稱與正文。"); return; }
-    const story: Story = {
-      id: crypto.randomUUID(), title: title.trim(), author: user.displayName || "鳩巢作者",
-      category: kind, description: description.trim() || "作者尚未填寫簡介。",
-      content, createdAt: Date.now()
-    };
-    setStories(prev => [story, ...prev]);
-    setTitle(""); setDescription(""); setContent(""); setNotice("作品已加入目前頁面。正式版資料庫尚待設定。");
-    setPage("read");
+    if (!title.trim() || !contentText.trim()) { setNotice("請填寫作品名稱與正文。"); return; }
+    if (!db) { setNotice("資料庫尚未連線，暫時無法發布作品。"); return; }
+
+    setNotice("正在將作品保存到鳩巢資料庫…");
+    try {
+      await addDoc(collection(db, "stories"), {
+        title: title.trim(),
+        author: user.displayName || "鳩巢作者",
+        authorUid: user.uid,
+        category: kind,
+        description: description.trim() || "作者尚未填寫簡介。",
+        content: contentText.trim(),
+        createdAt: Date.now()
+      });
+      setTitle("");
+      setDescription("");
+      setContentText("");
+      setNotice("發布成功！作品已保存到鳩巢資料庫。");
+      setPage("read");
+    } catch (error) {
+      console.error("Firestore publish:", error);
+      const code = error instanceof Error && "code" in error ? String(error.code) : "";
+      setNotice(code === "permission-denied"
+        ? "作品尚未保存：Firestore 安全規則尚未允許已登入作者發布。請先設定資料庫安全規則。"
+        : "發布失敗，請稍後再試。作品內容仍保留在編輯欄位中。");
+    }
   }
 
   async function login() {
     try { await signInWithGoogle(); setNotice("登入成功。"); }
     catch (e) { setNotice(e instanceof Error ? e.message : "登入未完成，請確認 Firebase 設定。"); }
+  }
+
+  async function logout() {
+    try { await signOutUser(); setNotice("已登出。"); }
+    catch { setNotice("登出時發生問題，請再試一次。"); }
   }
 
   return <main className="site-shell">
@@ -71,7 +130,7 @@ export default function Home() {
       </nav>
       <div className="account">
         {loading ? <span className="muted">載入中…</span> : user ?
-          <><span className="user-name">{user.displayName || user.email}</span><button className="small-outline" onClick={() => signOutUser()}>登出</button></> :
+          <><span className="user-name">{user.displayName || "已登入"}</span><button className="small-outline" onClick={logout}>登出</button></> :
           <button className="small-outline" onClick={login}>Google 登入</button>}
       </div>
     </header>
@@ -100,7 +159,7 @@ export default function Home() {
 
       {page === "read" && <section className="page-section">
         <p className="eyebrow">LIBRARY</p><h1>閱讀書架</h1><p className="muted">在眾多故事裡，找到你想停留的地方。</p>
-        <input className="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="搜尋作品名稱、作者或分類…"/>
+        <input className="search" value={queryText} onChange={e => setQueryText(e.target.value)} placeholder="搜尋作品名稱、作者或分類…"/>
         <div className="category-row">{categories.map(c => <button key={c} className={category === c ? "chip selected" : "chip"} onClick={() => setCategory(c)}>{c}</button>)}</div>
         <div className="story-grid">{filtered.map(s => <StoryCard key={s.id} story={s} onOpen={setSelected}/>)}</div>
         {!filtered.length && <p className="empty">沒有找到符合條件的作品。</p>}
@@ -113,14 +172,14 @@ export default function Home() {
           <label>作品名稱<input value={title} onChange={e => setTitle(e.target.value)} placeholder="為你的故事取一個名字"/></label>
           <label>作品分類<select value={kind} onChange={e => setKind(e.target.value)}>{categories.slice(1).map(c => <option key={c}>{c}</option>)}</select></label>
           <label>故事簡介<textarea rows={3} value={description} onChange={e => setDescription(e.target.value)} placeholder="簡單介紹你的故事…"/></label>
-          <label>正文內容<textarea rows={13} value={content} onChange={e => setContent(e.target.value)} placeholder="從這裡開始，寫下你的故事…"/></label>
-          <div className="editor-bottom"><span>正式版將加入草稿儲存與章節管理。</span><button className="primary" onClick={publish}>發布作品</button></div>
+          <label>正文內容<textarea rows={13} value={contentText} onChange={e => setContentText(e.target.value)} placeholder="從這裡開始，寫下你的故事…"/></label>
+          <div className="editor-bottom"><span>作品會保存到雲端資料庫。</span><button className="primary" onClick={publish}>發布作品</button></div>
         </div>
       </section>}
 
       {page === "authors" && <section className="page-section">
         <p className="eyebrow">OUR WRITERS</p><h1>創作者</h1><p className="muted">每一位作者，都擁有獨一無二的世界。</p>
-        <div className="author-panel"><div className="avatar">🕊</div><div><h2>{user?.displayName || "鳩巢的訪客"}</h2><p>{user ? user.email : "尚未登入 · 歡迎成為第一位作者"}</p></div></div>
+        <div className="author-panel"><div className="avatar">🕊</div><div><h2>{user?.displayName || "鳩巢的訪客"}</h2><p>{user ? "已登入 · 可以開始發布作品" : "尚未登入 · 歡迎成為第一位作者"}</p></div></div>
         <div className="invitation"><span>✉</span><h2>加入創作者行列</h2><p>建立自己的個人頁面，發布作品，讓讀者找到你的故事。</p><button className="primary" onClick={user ? () => setPage("write") : login}>{user ? "開始創作" : "註冊 / 登入"}</button></div>
       </section>}
     </>}
